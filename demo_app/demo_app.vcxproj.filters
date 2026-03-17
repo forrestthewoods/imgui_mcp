@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c</Extensions>
+    </Filter>
+    <Filter Include="Source Files\imgui">
+      <UniqueIdentifier>{A1B2C3D4-1111-2222-3333-444455556666}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\test_engine">
+      <UniqueIdentifier>{A1B2C3D4-1111-2222-3333-444455557777}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\bridge">
+      <UniqueIdentifier>{A1B2C3D4-1111-2222-3333-444455558888}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\imgui.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\imgui_demo.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\imgui_draw.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\imgui_tables.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\imgui_widgets.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui\backends\imgui_impl_dx11.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_engine.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_context.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_ui.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_utils.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_coroutine.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_exporters.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_te_perftool.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)vendor\imgui_test_engine\imgui_test_engine\imgui_capture_tool.cpp">
+      <Filter>Source Files\test_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)imgui_mcp_bridge\imgui_mcp_bridge.cpp">
+      <Filter>Source Files\bridge</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)imgui_mcp_bridge\imgui_mcp_capture.cpp">
+      <Filter>Source Files\bridge</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(SolutionDir)imgui_mcp_bridge\imgui_mcp_bridge.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)imgui_mcp_bridge\imgui_mcp_capture.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)imgui_mcp_bridge\imgui_mcp_protocol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

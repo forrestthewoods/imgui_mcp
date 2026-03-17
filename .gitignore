@@ -1,0 +1,22 @@
+# Build outputs
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.log
+Debug/
+Release/
+x64/
+.vs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
