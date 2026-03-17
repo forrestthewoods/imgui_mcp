@@ -12,7 +12,7 @@ class BridgeClient:
     Sends newline-delimited JSON commands and reads JSON responses.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8086, timeout: float = 30.0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8086, timeout: float = 60.0):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -83,7 +83,12 @@ class BridgeClient:
 
                 try:
                     chunk = self._sock.recv(65536)
-                except (OSError, socket.timeout) as e:
+                except socket.timeout as e:
+                    # Timeout doesn't mean the connection is dead — the bridge
+                    # may still be processing a slow command. Raise without
+                    # destroying the socket so the caller can retry.
+                    raise ConnectionError(f"Timed out waiting for response: {e}") from e
+                except OSError as e:
                     self._sock = None
                     raise ConnectionError(f"Failed to recv: {e}") from e
 

@@ -33,6 +33,11 @@ static std::thread              g_AcceptThread;
 static std::mutex               g_QueueMutex;
 static std::deque<McpCommand>   g_CommandQueue;
 
+// On-demand test queuing: test only runs while processing commands,
+// so it doesn't hijack mouse/keyboard input when idle.
+static ImGuiTest*               g_Test = nullptr;
+static std::atomic<bool>        g_TestRunning{false};
+
 //-----------------------------------------------------------------------------
 // TCP Server
 //-----------------------------------------------------------------------------
@@ -98,7 +103,9 @@ static void HandleClient(SOCKET client_socket)
                 g_CommandQueue.push_back(std::move(mcp_cmd));
             }
 
-            // Wait for the coroutine to process and return the result
+            // Wait for the test coroutine to process and return the result.
+            // ImGuiMcpBridge_Tick() (called from main loop) will queue the test
+            // which will pick up this command.
             nlohmann::json response;
             try
             {
@@ -165,61 +172,35 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
         }
         else if (cmd.Cmd == "screenshot")
         {
-            // Use test engine's capture system
-            ImGuiCaptureArgs args;
-            ImGuiCaptureImageBuf image_buf;
-            args.InOutputImageBuf = &image_buf;
-            args.InFlags = ImGuiCaptureFlags_Instant;
-
-            bool ok = ctx->CaptureScreenshot(args.InFlags);
-            if (!ok)
+            // Direct capture fallback: use our own capture function directly.
+            // This is more reliable than going through the test engine's capture
+            // system which may require multi-frame orchestration.
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            int vw = (int)viewport->Size.x;
+            int vh = (int)viewport->Size.y;
+            if (vw > 0 && vh > 0)
             {
-                // Fallback: capture to temp file, read back
-                char tmp_path[512];
-                snprintf(tmp_path, sizeof(tmp_path), "%s/imgui_mcp_screenshot.png", ".");
-                ImStrncpy(args.InOutputFile, tmp_path, sizeof(args.InOutputFile));
-                args.InOutputImageBuf = &image_buf;
-                ok = ctx->CaptureScreenshot(0);
-            }
-
-            if (ok && image_buf.Data && image_buf.Width > 0 && image_buf.Height > 0)
-            {
-                std::string b64 = ImGuiMcpCapture_EncodePNG(image_buf.Data, image_buf.Width, image_buf.Height);
-                resp["ok"] = true;
-                resp["image"] = b64;
-                resp["width"] = image_buf.Width;
-                resp["height"] = image_buf.Height;
-            }
-            else
-            {
-                // Direct capture fallback: use our own capture function
-                ImGuiViewport* viewport = ImGui::GetMainViewport();
-                int vw = (int)viewport->Size.x;
-                int vh = (int)viewport->Size.y;
-                if (vw > 0 && vh > 0)
+                std::vector<unsigned int> pixels(vw * vh);
+                bool captured = ImGuiMcpCapture_ScreenCaptureFunc(
+                    viewport->ID, 0, 0, vw, vh, pixels.data(), &g_CaptureUserData);
+                if (captured)
                 {
-                    std::vector<unsigned int> pixels(vw * vh);
-                    bool captured = ImGuiMcpCapture_ScreenCaptureFunc(
-                        viewport->ID, 0, 0, vw, vh, pixels.data(), &g_CaptureUserData);
-                    if (captured)
-                    {
-                        std::string b64 = ImGuiMcpCapture_EncodePNG(pixels.data(), vw, vh);
-                        resp["ok"] = true;
-                        resp["image"] = b64;
-                        resp["width"] = vw;
-                        resp["height"] = vh;
-                    }
-                    else
-                    {
-                        resp["ok"] = false;
-                        resp["error"] = "Screen capture failed";
-                    }
+                    std::string b64 = ImGuiMcpCapture_EncodePNG(pixels.data(), vw, vh);
+                    resp["ok"] = true;
+                    resp["image"] = b64;
+                    resp["width"] = vw;
+                    resp["height"] = vh;
                 }
                 else
                 {
                     resp["ok"] = false;
-                    resp["error"] = "Invalid viewport size";
+                    resp["error"] = "Screen capture failed";
                 }
+            }
+            else
+            {
+                resp["ok"] = false;
+                resp["error"] = "Invalid viewport size";
             }
         }
         else if (cmd.Cmd == "click")
@@ -232,8 +213,16 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
             }
             else
             {
-                ctx->ItemClick(ref.c_str());
-                resp["ok"] = true;
+                ctx->ItemClick(ref.c_str(), 0, ImGuiTestOpFlags_NoError);
+                if (ctx->IsError())
+                {
+                    resp["ok"] = false;
+                    resp["error"] = "Click failed (item not found or not clickable): " + ref;
+                }
+                else
+                {
+                    resp["ok"] = true;
+                }
             }
         }
         else if (cmd.Cmd == "double_click")
@@ -246,33 +235,34 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
             }
             else
             {
-                ctx->ItemDoubleClick(ref.c_str());
-                resp["ok"] = true;
+                ctx->ItemDoubleClick(ref.c_str(), ImGuiTestOpFlags_NoError);
+                if (ctx->IsError()) { resp["ok"] = false; resp["error"] = "Double-click failed: " + ref; }
+                else { resp["ok"] = true; }
             }
         }
         else if (cmd.Cmd == "check")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemCheck(ref.c_str()); resp["ok"] = true; }
+            else { ctx->ItemCheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Check failed: " + ref; }
         }
         else if (cmd.Cmd == "uncheck")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemUncheck(ref.c_str()); resp["ok"] = true; }
+            else { ctx->ItemUncheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Uncheck failed: " + ref; }
         }
         else if (cmd.Cmd == "open")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemOpen(ref.c_str()); resp["ok"] = true; }
+            else { ctx->ItemOpen(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Open failed: " + ref; }
         }
         else if (cmd.Cmd == "close")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemClose(ref.c_str()); resp["ok"] = true; }
+            else { ctx->ItemClose(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Close failed: " + ref; }
         }
         else if (cmd.Cmd == "input")
         {
@@ -281,21 +271,20 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
             else
             {
-                ctx->ItemInput(ref.c_str());
-                if (!text.empty())
+                ctx->ItemInput(ref.c_str(), ImGuiTestOpFlags_NoError);
+                if (!text.empty() && !ctx->IsError())
                     ctx->KeyCharsReplace(text.c_str());
-                resp["ok"] = true;
+                resp["ok"] = !ctx->IsError();
+                if (!resp["ok"]) resp["error"] = "Input failed: " + ref;
             }
         }
         else if (cmd.Cmd == "key_press")
         {
-            // Accept key name as string, map to ImGuiKey
             std::string key = cmd.Params.value("key", "");
             if (key.empty()) { resp["ok"] = false; resp["error"] = "Missing 'key'"; }
             else
             {
                 ImGuiKey imgui_key = ImGuiKey_None;
-                // Common key mappings
                 if (key == "Enter" || key == "Return") imgui_key = ImGuiKey_Enter;
                 else if (key == "Escape") imgui_key = ImGuiKey_Escape;
                 else if (key == "Tab") imgui_key = ImGuiKey_Tab;
@@ -341,7 +330,6 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
             {
                 if (!window->Active || window->Hidden)
                     continue;
-                // Skip internal/debug windows
                 if (window->Flags & ImGuiWindowFlags_Tooltip)
                     continue;
 
@@ -459,16 +447,17 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
 }
 
 //-----------------------------------------------------------------------------
-// Test Coroutine (registered as a test, runs on the main thread)
+// Test Coroutine (registered as a test, queued on-demand)
+//
+// Processes all pending commands then exits immediately, so the test engine
+// releases input control back to the human user between commands.
 //-----------------------------------------------------------------------------
 
 static void RemoteControlTestFunc(ImGuiTestContext* ctx)
 {
-    printf("[MCP Bridge] Remote control test started\n");
-
-    while (g_Running.load() && !ctx->IsError())
+    // Process all commands currently in the queue
+    while (g_Running.load())
     {
-        // Check for commands
         McpCommand cmd;
         bool has_cmd = false;
         {
@@ -481,16 +470,17 @@ static void RemoteControlTestFunc(ImGuiTestContext* ctx)
             }
         }
 
-        if (has_cmd)
-        {
-            nlohmann::json response = DispatchCommand(ctx, cmd);
-            cmd.Promise.set_value(std::move(response));
-        }
+        if (!has_cmd)
+            break;  // Queue empty — exit test to release input control
 
+        nlohmann::json response = DispatchCommand(ctx, cmd);
+        cmd.Promise.set_value(std::move(response));
+
+        // Yield between commands so the UI can update
         ctx->Yield();
     }
 
-    printf("[MCP Bridge] Remote control test ended\n");
+    g_TestRunning.store(false);
 }
 
 //-----------------------------------------------------------------------------
@@ -501,6 +491,7 @@ bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config)
 {
     g_Config = config;
     g_WantsShutdown.store(false);
+    g_TestRunning.store(false);
 
     // Setup capture user data
     g_CaptureUserData.D3DDevice = config.D3DDevice;
@@ -511,9 +502,11 @@ bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config)
     test_io.ScreenCaptureFunc = ImGuiMcpCapture_ScreenCaptureFunc;
     test_io.ScreenCaptureUserData = &g_CaptureUserData;
 
-    // Register the remote_control test
-    ImGuiTest* test = ImGuiTestEngine_RegisterTest(config.TestEngine, "mcp", "remote_control");
-    test->TestFunc = RemoteControlTestFunc;
+    // Register the remote_control test (but don't queue it yet — Tick() will
+    // queue it on-demand when commands arrive)
+    g_Test = ImGuiTestEngine_RegisterTest(config.TestEngine, "mcp", "remote_control");
+    g_Test->TestFunc = RemoteControlTestFunc;
+    g_Test->Flags |= ImGuiTestFlags_NoGuiWarmUp;  // Skip warmup frames for lower latency
 
     // Initialize Winsock
     WSADATA wsa_data;
@@ -565,10 +558,22 @@ bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config)
     g_Running.store(true);
     g_AcceptThread = std::thread(AcceptThreadFunc);
 
-    // Queue the remote_control test to start running
-    ImGuiTestEngine_QueueTest(config.TestEngine, test);
-
     return true;
+}
+
+void ImGuiMcpBridge_Tick()
+{
+    // Called from the main loop each frame. If commands are waiting and the
+    // test isn't already running, queue it so the test engine picks them up.
+    if (!g_TestRunning.load())
+    {
+        std::lock_guard<std::mutex> lock(g_QueueMutex);
+        if (!g_CommandQueue.empty())
+        {
+            g_TestRunning.store(true);
+            ImGuiTestEngine_QueueTest(g_Config.TestEngine, g_Test);
+        }
+    }
 }
 
 void ImGuiMcpBridge_Shutdown()

@@ -17,6 +17,10 @@ struct ImGuiMcpBridgeConfig
 // Registers the remote_control test and starts the TCP server.
 bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config);
 
+// Call every frame from the main loop (e.g. after ImGui::NewFrame()).
+// Checks for pending commands and queues the test to process them.
+void ImGuiMcpBridge_Tick();
+
 // Shut down the MCP bridge. Call before ImGuiTestEngine_Stop().
 void ImGuiMcpBridge_Shutdown();
 

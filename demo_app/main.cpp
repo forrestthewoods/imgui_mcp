@@ -111,6 +111,9 @@ int main(int, char**)
             CreateRenderTarget();
         }
 
+        // Check for pending MCP commands and queue test if needed
+        ImGuiMcpBridge_Tick();
+
         // Start the Dear ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
