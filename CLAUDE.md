@@ -44,6 +44,21 @@ The only hierarchy separator is the **window name** as root. All tree nodes with
 - Sub-items like "Basic", "Bullets" under "Widgets" are siblings at the ref path level, not children of "Widgets"
 - `list_items(ref="Dear ImGui Demo/Widgets")` returns NOTHING because "Widgets" is not a container — use `list_items(ref="Dear ImGui Demo")` instead
 
+## Debugging: timeouts are never the answer
+
+We run on local TCP loopback. It is extremely fast and reliable. If a command
+appears to "time out", something in the C++ bridge or test engine **hung** —
+the response never came back. Increasing the timeout just delays discovering
+the real bug. Diagnose what caused the hang instead:
+
+- The test engine's `ItemOpen`/`ItemClick` can get stuck if the item requires
+  navigation that never completes (e.g., scrolling to an item inside a
+  complex table, or an item that disappears when the tree is manipulated).
+- The TCP thread blocks on `future.get()` waiting for the test coroutine. If
+  the coroutine never processes the command (because it exited, errored, or
+  got stuck), the TCP thread hangs forever.
+- Look at the C++ console output for test engine errors/warnings.
+
 ## Bridge design notes
 
 - The bridge uses **on-demand test queuing** — the test engine test only runs while processing commands, then exits to release input control back to the human user
