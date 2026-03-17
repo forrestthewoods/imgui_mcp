@@ -64,8 +64,8 @@ int main(int, char**)
     ImGuiTestEngineIO& test_io = ImGuiTestEngine_GetIO(engine);
     test_io.ConfigVerboseLevel = ImGuiTestVerboseLevel_Info;
     test_io.ConfigRunSpeed = ImGuiTestRunSpeed_Fast;
-    test_io.ConfigWatchdogWarning = FLT_MAX;    // Disable watchdog (remote_control test runs forever)
-    test_io.ConfigWatchdogKillTest = FLT_MAX;
+    test_io.ConfigWatchdogWarning = 10.0f;      // Warn after 10s (per test run)
+    test_io.ConfigWatchdogKillTest = 15.0f;     // Kill after 15s — prevents hung ScrollTo loops
     test_io.ConfigBreakOnError = false;         // Don't trigger debugger on test failures
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_InstallDefaultCrashHandler();

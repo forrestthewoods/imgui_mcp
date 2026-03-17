@@ -16,6 +16,7 @@
 #include <mutex>
 #include <deque>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 
 //-----------------------------------------------------------------------------
@@ -37,6 +38,17 @@ static std::deque<McpCommand>   g_CommandQueue;
 // so it doesn't hijack mouse/keyboard input when idle.
 static ImGuiTest*               g_Test = nullptr;
 static std::atomic<bool>        g_TestRunning{false};
+using SteadyClock = std::chrono::steady_clock;
+using TimePoint = std::chrono::time_point<SteadyClock>;
+static std::atomic<bool>        g_CommandActive{false};
+static TimePoint                g_CommandStartTime;
+static constexpr double         g_CommandTimeoutSec = 10.0;  // Abort if a single command takes longer
+
+// Tracks the command currently being processed by the coroutine.
+// If the test gets aborted mid-command, the teardown function uses
+// this to fulfill the promise with an error.
+static std::mutex               g_ActiveCmdMutex;
+static McpCommand*              g_ActiveCmd = nullptr;  // non-owning, points into local in test func
 
 //-----------------------------------------------------------------------------
 // TCP Server
@@ -206,76 +218,57 @@ static nlohmann::json DispatchCommand(ImGuiTestContext* ctx, const McpCommand& c
         else if (cmd.Cmd == "click")
         {
             std::string ref = cmd.Params.value("ref", "");
-            if (ref.empty())
-            {
-                resp["ok"] = false;
-                resp["error"] = "Missing 'ref' parameter";
-            }
-            else
-            {
-                ctx->ItemClick(ref.c_str(), 0, ImGuiTestOpFlags_NoError);
-                if (ctx->IsError())
-                {
-                    resp["ok"] = false;
-                    resp["error"] = "Click failed (item not found or not clickable): " + ref;
-                }
-                else
-                {
-                    resp["ok"] = true;
-                }
-            }
+            if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref' parameter"; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemClick(ref.c_str(), 0, ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "double_click")
         {
             std::string ref = cmd.Params.value("ref", "");
-            if (ref.empty())
-            {
-                resp["ok"] = false;
-                resp["error"] = "Missing 'ref' parameter";
-            }
-            else
-            {
-                ctx->ItemDoubleClick(ref.c_str(), ImGuiTestOpFlags_NoError);
-                if (ctx->IsError()) { resp["ok"] = false; resp["error"] = "Double-click failed: " + ref; }
-                else { resp["ok"] = true; }
-            }
+            if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref' parameter"; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemDoubleClick(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "check")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemCheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Check failed: " + ref; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemCheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "uncheck")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemUncheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Uncheck failed: " + ref; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemUncheck(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "open")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemOpen(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Open failed: " + ref; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemOpen(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "close")
         {
             std::string ref = cmd.Params.value("ref", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
-            else { ctx->ItemClose(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = !ctx->IsError(); if (!resp["ok"]) resp["error"] = "Close failed: " + ref; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
+            else { ctx->ItemClose(ref.c_str(), ImGuiTestOpFlags_NoError); resp["ok"] = true; }
         }
         else if (cmd.Cmd == "input")
         {
             std::string ref = cmd.Params.value("ref", "");
             std::string text = cmd.Params.value("text", "");
             if (ref.empty()) { resp["ok"] = false; resp["error"] = "Missing 'ref'"; }
+            else if (!ctx->ItemExists(ref.c_str())) { resp["ok"] = false; resp["error"] = "Item not found: " + ref; }
             else
             {
                 ctx->ItemInput(ref.c_str(), ImGuiTestOpFlags_NoError);
-                if (!text.empty() && !ctx->IsError())
+                if (!text.empty())
                     ctx->KeyCharsReplace(text.c_str());
-                resp["ok"] = !ctx->IsError();
-                if (!resp["ok"]) resp["error"] = "Input failed: " + ref;
+                resp["ok"] = true;
             }
         }
         else if (cmd.Cmd == "key_press")
@@ -473,11 +466,68 @@ static void RemoteControlTestFunc(ImGuiTestContext* ctx)
         if (!has_cmd)
             break;  // Queue empty — exit test to release input control
 
+        // Track active command so teardown can fulfill promise if we get aborted
+        {
+            std::lock_guard<std::mutex> lock(g_ActiveCmdMutex);
+            g_ActiveCmd = &cmd;
+        }
+        g_CommandStartTime = SteadyClock::now();
+        g_CommandActive.store(true);
+
         nlohmann::json response = DispatchCommand(ctx, cmd);
+
+        // Clear active command before fulfilling promise
+        g_CommandActive.store(false);
+        {
+            std::lock_guard<std::mutex> lock(g_ActiveCmdMutex);
+            g_ActiveCmd = nullptr;
+        }
+
         cmd.Promise.set_value(std::move(response));
 
         // Yield between commands so the UI can update
         ctx->Yield();
+    }
+
+    g_TestRunning.store(false);
+}
+
+// Called by the test engine when the test exits for ANY reason (normal exit,
+// error, or watchdog kill). Fulfills any pending promises so the TCP thread
+// doesn't hang forever.
+static void RemoteControlTeardownFunc(ImGuiTestContext* ctx)
+{
+    (void)ctx;
+
+    // If there's an active command that never got a response (watchdog killed us),
+    // fulfill its promise with an error.
+    {
+        std::lock_guard<std::mutex> lock(g_ActiveCmdMutex);
+        if (g_ActiveCmd)
+        {
+            nlohmann::json resp;
+            resp["id"] = g_ActiveCmd->Id;
+            resp["ok"] = false;
+            resp["error"] = "Command aborted (test engine watchdog or error)";
+            g_ActiveCmd->Promise.set_value(std::move(resp));
+            g_ActiveCmd = nullptr;
+            printf("[MCP Bridge] Active command aborted by watchdog\n");
+        }
+    }
+
+    // Drain any remaining queued commands that never got processed
+    {
+        std::lock_guard<std::mutex> lock(g_QueueMutex);
+        while (!g_CommandQueue.empty())
+        {
+            auto& cmd = g_CommandQueue.front();
+            nlohmann::json resp;
+            resp["id"] = cmd.Id;
+            resp["ok"] = false;
+            resp["error"] = "Command dropped (test was killed)";
+            cmd.Promise.set_value(std::move(resp));
+            g_CommandQueue.pop_front();
+        }
     }
 
     g_TestRunning.store(false);
@@ -506,6 +556,7 @@ bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config)
     // queue it on-demand when commands arrive)
     g_Test = ImGuiTestEngine_RegisterTest(config.TestEngine, "mcp", "remote_control");
     g_Test->TestFunc = RemoteControlTestFunc;
+    g_Test->TeardownFunc = RemoteControlTeardownFunc;
     g_Test->Flags |= ImGuiTestFlags_NoGuiWarmUp;  // Skip warmup frames for lower latency
 
     // Initialize Winsock
@@ -563,15 +614,48 @@ bool ImGuiMcpBridge_Init(const ImGuiMcpBridgeConfig& config)
 
 void ImGuiMcpBridge_Tick()
 {
-    // Called from the main loop each frame. If commands are waiting and the
-    // test isn't already running, queue it so the test engine picks them up.
-    if (!g_TestRunning.load())
+    // Called from the main loop each frame.
+    static int s_stallFrames = 0;
+    bool test_running = g_TestRunning.load();
+    bool cmd_active = g_CommandActive.load();
+    bool has_cmds = false;
     {
         std::lock_guard<std::mutex> lock(g_QueueMutex);
-        if (!g_CommandQueue.empty())
+        has_cmds = !g_CommandQueue.empty();
+    }
+
+    if (!test_running)
+    {
+        if (has_cmds)
         {
             g_TestRunning.store(true);
+            s_stallFrames = 0;
             ImGuiTestEngine_QueueTest(g_Config.TestEngine, g_Test);
+        }
+    }
+    else if (cmd_active)
+    {
+        // Command is actively being processed — check for timeout.
+        s_stallFrames = 0;
+        auto now = SteadyClock::now();
+        double elapsed = std::chrono::duration<double>(now - g_CommandStartTime).count();
+        if (elapsed > g_CommandTimeoutSec)
+        {
+            printf("[MCP Bridge] Command timeout (%.1fs), aborting\n", elapsed);
+            g_CommandActive.store(false);
+            ImGuiTestEngine_AbortCurrentTest(g_Config.TestEngine);
+        }
+    }
+    else if (has_cmds)
+    {
+        // Test is "running" but no command is active, and commands are waiting.
+        // Normal during test startup (1-2 frames). Force reset if stuck too long.
+        s_stallFrames++;
+        if (s_stallFrames > 120)  // ~2 seconds at 60fps
+        {
+            printf("[MCP Bridge] Stall detected, re-queuing\n");
+            g_TestRunning.store(false);
+            s_stallFrames = 0;
         }
     }
 }

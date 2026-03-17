@@ -59,9 +59,27 @@ the real bug. Diagnose what caused the hang instead:
   got stuck), the TCP thread hangs forever.
 - Look at the C++ console output for test engine errors/warnings.
 
+**Items with `/` in their label can't be used as ref paths:**
+- Labels like "Color/Picker Widgets" or "Drag/Slider Flags" have `/` in them
+- The test engine interprets `/` as a path separator, so `Dear ImGui Demo/Color/Picker Widgets` is parsed as window/Color/Picker...
+- These will return "Item not found" — this is expected, not a bug
+- Also, `DebugLabel` is truncated to 32 chars, so long labels may not match
+
 ## Bridge design notes
 
 - The bridge uses **on-demand test queuing** — the test engine test only runs while processing commands, then exits to release input control back to the human user
-- `ImGuiMcpBridge_Tick()` must be called every frame from the main loop to check for pending commands
-- All item operations use `ImGuiTestOpFlags_NoError` to prevent a bad ref path from killing the test coroutine
+- `ImGuiMcpBridge_Tick()` must be called every frame from the main loop to check for pending commands and detect hung operations
+- All item operations pre-check with `ItemExists` before acting — this prevents hangs from navigating to non-existent items
+- `ImGuiTestOpFlags_NoError` is used on all operations to prevent a bad ref path from killing the test coroutine
 - The test engine auto-scrolls and auto-focuses windows when interacting with items
+
+### Abort mechanism (critical)
+
+The test engine's `ScrollTo` has a `while (!Abort)` loop that can hang forever. The built-in watchdog (`ConfigWatchdogKillTest`) does NOT set `ctx->Abort` — it only logs an error. The bridge implements its own timeout:
+
+1. `Tick()` uses wall-clock time (`std::chrono::steady_clock`) to track how long a command has been active
+2. After 10 seconds, it calls `ImGuiTestEngine_AbortCurrentTest()` which properly sets `ctx->Abort`
+3. A `TeardownFunc` fulfills any pending promises so the TCP thread doesn't hang on `future.get()`
+4. A stall detector re-queues tests if `g_TestRunning` is true but no commands are being processed
+
+**Do NOT use `ImGui::GetTime()`** for timeout detection — the test engine can override `DeltaTime` in Fast mode, making ImGui time advance inconsistently.
